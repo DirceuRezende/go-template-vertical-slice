@@ -41,3 +41,19 @@ func (m *MockRepository) FindAll(ctx context.Context) ([]*user.User, error) {
 	r, _ := args.Get(0).([]*user.User)
 	return r, args.Error(1)
 }
+
+func (m *MockRepository) FindByEmail(ctx context.Context, email string) (*user.User, error) {
+	args := m.Called(ctx, email)
+	r, _ := args.Get(0).(*user.User)
+	return r, args.Error(1)
+}
+
+func (m *MockRepository) UpdatePassword(ctx context.Context, id uuid.UUID, hash string) error {
+	return m.Called(ctx, id, hash).Error(0)
+}
+
+func (m *MockRepository) SetRoles(ctx context.Context, id uuid.UUID, roles []string) (*user.User, error) {
+	args := m.Called(ctx, id, roles)
+	r, _ := args.Get(0).(*user.User)
+	return r, args.Error(1)
+}

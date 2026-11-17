@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"users-api/internal/auth"
+	authpostgres "users-api/internal/auth/postgres"
 	"users-api/internal/httpapi"
 	"users-api/internal/plataform/database"
 	"users-api/internal/user"
@@ -39,7 +41,16 @@ func main() {
 	service := user.NewService(repository, cfg.hasher)
 	userHandler := user.NewHandler(service)
 
-	router := httpapi.NewRouter(userHandler)
+	if cfg.adminEmail != "" {
+		if err := service.EnsureAdmin(ctx, cfg.adminEmail, cfg.adminPassword); err != nil {
+			log.Fatalf("admin inicial: %v", err)
+		}
+	}
+
+	authService := auth.NewService(authpostgres.NewRepository(pool), service, cfg.hasher, cfg.tokens, cfg.refreshTTL)
+	authHandler := auth.NewHandler(authService)
+
+	router := httpapi.NewRouter(userHandler, authHandler, cfg.tokens)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.port,

@@ -15,7 +15,7 @@ Ordem (cada passo tem sua skill detalhada):
 4. **Service** → skill `new-service`.
 5. **Handler + DTOs + `routes.go`** → skill `new-handler` / `new-endpoint`.
 6. **Doubles** `internal/<m>/<m>test/`: copie `usertest/fake_repository.go` e `mock_repository.go` adaptando tipos e regras de unicidade.
-7. **Wiring**: em `internal/httpapi/router.go` receba o novo handler em `NewRouter(...)` e chame `RegisterRoutes(router)`; em `cmd/api/main.go` monte `postgres.NewRepository(pool)` → `NewService` → `NewHandler` e passe ao router. Atualize `router_test.go` e o e2e (`TestMain`).
+7. **Wiring**: em `internal/httpapi/router.go` receba o novo handler em `NewRouter(...)` e chame `RegisterRoutes(router, authenticate)` (middleware `authn.Middleware` já criado no router); em `cmd/api/main.go` monte `postgres.NewRepository(pool)` → `NewService` → `NewHandler` e passe ao router. Atualize `router_test.go` e o e2e (`TestMain`; as chamadas precisam de Bearer token, ver helpers `login`/`createAdmin`).
 8. **Testes** → skill `new-tests` (unit, handler, integração, e2e).
 9. Atualize a árvore em `CLAUDE.md` se surgir algo novo.
 

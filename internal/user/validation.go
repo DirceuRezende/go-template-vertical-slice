@@ -30,6 +30,9 @@ func strongPassword(fl validator.FieldLevel) bool {
 	return upper && lower && symbol
 }
 
+// roleName valida o formato de um nome de role (mesma regra do banco).
+func roleName(fl validator.FieldLevel) bool { return validRoleName(fl.Field().String()) }
+
 // RegisterValidations registra as validações customizadas no validator do Gin.
 // Chame uma vez na inicialização (ex.: no main, antes de subir o router).
 func RegisterValidations() error {
@@ -42,7 +45,10 @@ func RegisterValidations() error {
 			}
 			return name
 		})
-		return v.RegisterValidation("strong_password", strongPassword)
+		if err := v.RegisterValidation("strong_password", strongPassword); err != nil {
+			return err
+		}
+		return v.RegisterValidation("role_name", roleName)
 	}
 	return nil
 }

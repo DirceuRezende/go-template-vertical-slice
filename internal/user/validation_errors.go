@@ -34,6 +34,8 @@ func fieldMessage(fe validator.FieldError) string {
 		return fmt.Sprintf("deve ser no máximo %s", fe.Param())
 	case "strong_password":
 		return "deve conter ao menos uma letra maiúscula, uma minúscula e um símbolo (" + passwordSymbols + ")"
+	case "role_name":
+		return "deve ter de 2 a 32 caracteres: letras minúsculas, números e _"
 	default:
 		return "valor inválido (" + fe.Tag() + ")"
 	}
@@ -48,9 +50,9 @@ func fieldErrors(errs validator.ValidationErrors) []FieldError {
 	return out
 }
 
-// respondBindError responde a falha de ShouldBind: 422 com os campos inválidos
+// RespondBindError responde a falha de ShouldBind: 422 com os campos inválidos
 // ou 400 quando o corpo nem é um JSON válido.
-func respondBindError(c *gin.Context, err error) {
+func RespondBindError(c *gin.Context, err error) {
 	if verrs, ok := errors.AsType[validator.ValidationErrors](err); ok {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
 			"error":  "dados inválidos",

@@ -218,3 +218,127 @@ func TestService_Create_DuplicateEmail_WithFake(t *testing.T) {
 	_, err = svc.Create(ctx, user.Input{Name: "Outra", Email: "ANA@example.com", Password: "Senha@123", Age: 31})
 	assert.ErrorIs(t, err, user.ErrEmailTaken)
 }
+
+func TestService_SetRoles_DeduplicatesAndDelegates(t *testing.T) {
+	id := uuid.New()
+	repo := new(usertest.MockRepository)
+	repo.On("SetRoles", mock.Anything, id, []string{"user", "editor"}).Return(&user.User{ID: id}, nil)
+
+	_, err := user.NewService(repo, newHasher(t)).SetRoles(context.Background(), id, []string{"user", "editor", "user"})
+
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+}
+
+func TestService_SetRoles_Invalid(t *testing.T) {
+	svc := user.NewService(new(usertest.MockRepository), newHasher(t))
+	id := uuid.New()
+
+	tests := map[string][]string{
+		"vazio":          {},
+		"maiúscula":      {"Admin"},
+		"curto":          {"a"},
+		"muito longo":    {"abcdefghijklmnopqrstuvwxyzabcdefg"},
+		"caractere ruim": {"ad-min"},
+	}
+	for name, roles := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.SetRoles(context.Background(), id, roles)
+			assert.ErrorIs(t, err, user.ErrInvalidRole)
+		})
+	}
+
+	_, err := svc.SetRoles(context.Background(), uuid.Nil(), []string{"user"})
+	assert.ErrorIs(t, err, user.ErrInvalidID)
+}
+
+func TestService_LastAdmin_WithFake(t *testing.T) {
+	ctx := context.Background()
+	svc := user.NewService(usertest.NewFakeRepository(), newHasher(t))
+	a, err := svc.Create(ctx, user.Input{Name: "Ana", Email: "a@a.com", Password: "Senha@123", Age: 30})
+	require.NoError(t, err)
+	b, err := svc.Create(ctx, user.Input{Name: "Bia", Email: "b@b.com", Password: "Senha@123", Age: 30})
+	require.NoError(t, err)
+
+	_, err = svc.SetRoles(ctx, a.ID, []string{"user", "admin"})
+	require.NoError(t, err)
+
+	t.Run("único admin não perde o role nem é excluído", func(t *testing.T) {
+		_, err := svc.SetRoles(ctx, a.ID, []string{"user"})
+		assert.ErrorIs(t, err, user.ErrLastAdmin)
+		assert.ErrorIs(t, svc.Delete(ctx, a.ID), user.ErrLastAdmin)
+	})
+	t.Run("com dois admins um pode sair", func(t *testing.T) {
+		_, err := svc.SetRoles(ctx, b.ID, []string{"user", "admin"})
+		require.NoError(t, err)
+
+		_, err = svc.SetRoles(ctx, a.ID, []string{"user"})
+		require.NoError(t, err)
+		assert.ErrorIs(t, svc.Delete(ctx, b.ID), user.ErrLastAdmin)
+	})
+	t.Run("usuário comum pode ser excluído", func(t *testing.T) {
+		assert.NoError(t, svc.Delete(ctx, a.ID))
+	})
+}
+
+func TestService_EnsureAdmin(t *testing.T) {
+	ctx := context.Background()
+	hasher := newHasher(t)
+
+	t.Run("cria o admin quando não existe", func(t *testing.T) {
+		svc := user.NewService(usertest.NewFakeRepository(), hasher)
+
+		require.NoError(t, svc.EnsureAdmin(ctx, "root@example.com", "Senha@123"))
+
+		got, err := svc.FindByEmail(ctx, "ROOT@example.com")
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"user", "admin"}, got.Roles)
+		assert.True(t, hasher.Matches(got.Password, "Senha@123"))
+	})
+	t.Run("é idempotente", func(t *testing.T) {
+		svc := user.NewService(usertest.NewFakeRepository(), hasher)
+		require.NoError(t, svc.EnsureAdmin(ctx, "root@example.com", "Senha@123"))
+		first, _ := svc.FindByEmail(ctx, "root@example.com")
+
+		require.NoError(t, svc.EnsureAdmin(ctx, "root@example.com", "Outra@456"))
+
+		all, err := svc.GetAll(ctx)
+		require.NoError(t, err)
+		require.Len(t, all, 1)
+		assert.Equal(t, first.Password, all[0].Password, "não deve trocar a senha")
+	})
+	t.Run("promove usuário existente sem mexer na senha", func(t *testing.T) {
+		svc := user.NewService(usertest.NewFakeRepository(), hasher)
+		created, err := svc.Create(ctx, user.Input{Name: "Ana", Email: "ana@example.com", Password: "Senha@123", Age: 30})
+		require.NoError(t, err)
+
+		require.NoError(t, svc.EnsureAdmin(ctx, "ana@example.com", "Outra@456"))
+
+		got, err := svc.Get(ctx, created.ID)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"user", "admin"}, got.Roles)
+		assert.True(t, hasher.Matches(got.Password, "Senha@123"))
+	})
+	t.Run("propaga erro do repositório", func(t *testing.T) {
+		repo := new(usertest.MockRepository)
+		repo.On("FindByEmail", mock.Anything, "x@x.com").Return(nil, errBoom)
+
+		assert.ErrorIs(t, user.NewService(repo, hasher).EnsureAdmin(ctx, "x@x.com", "Senha@123"), errBoom)
+	})
+}
+
+func TestService_UpdatePassword_IncrementaTokenVersion(t *testing.T) {
+	ctx := context.Background()
+	svc := user.NewService(usertest.NewFakeRepository(), newHasher(t))
+	u, err := svc.Create(ctx, user.Input{Name: "Ana", Email: "a@a.com", Password: "Senha@123", Age: 30})
+	require.NoError(t, err)
+	assert.Equal(t, 0, u.TokenVersion)
+
+	require.NoError(t, svc.UpdatePassword(ctx, u.ID, "novo-hash"))
+
+	got, err := svc.Get(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.TokenVersion)
+	assert.Equal(t, "novo-hash", got.Password)
+	assert.ErrorIs(t, svc.UpdatePassword(ctx, uuid.New(), "h"), user.ErrNotFound)
+}

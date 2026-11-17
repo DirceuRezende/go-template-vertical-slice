@@ -2,6 +2,9 @@ package user
 
 import (
 	"context"
+	"errors"
+	"regexp"
+	"slices"
 	"time"
 	"uuid"
 
@@ -100,4 +103,68 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 
 	return nil
+}
+
+// roleNamePattern espelha o CHECK da tabela roles.
+var roleNamePattern = regexp.MustCompile(`^[a-z0-9_]{2,32}$`)
+
+func validRoleName(name string) bool { return roleNamePattern.MatchString(name) }
+
+// SetRoles substitui os roles do usuário. Roles novos são criados na hora.
+func (s *Service) SetRoles(ctx context.Context, id uuid.UUID, roles []string) (*User, error) {
+	if id == uuid.Nil() {
+		return nil, ErrInvalidID
+	}
+
+	unique := make([]string, 0, len(roles))
+	for _, role := range roles {
+		if !validRoleName(role) {
+			return nil, ErrInvalidRole
+		}
+		if !slices.Contains(unique, role) {
+			unique = append(unique, role)
+		}
+	}
+	if len(unique) == 0 {
+		return nil, ErrInvalidRole
+	}
+
+	return s.repo.SetRoles(ctx, id, unique)
+}
+
+func (s *Service) FindByEmail(ctx context.Context, email string) (*User, error) {
+	return s.repo.FindByEmail(ctx, email)
+}
+
+// UpdatePassword grava um hash já calculado (quem chama usa o Hasher).
+func (s *Service) UpdatePassword(ctx context.Context, id uuid.UUID, hash string) error {
+	return s.repo.UpdatePassword(ctx, id, hash)
+}
+
+// EnsureAdmin garante que exista um admin com o e-mail informado. É idempotente:
+// se o usuário já existe só ganha o role admin, sem trocar a senha.
+func (s *Service) EnsureAdmin(ctx context.Context, email, password string) error {
+	existing, err := s.repo.FindByEmail(ctx, email)
+
+	if errors.Is(err, ErrNotFound) {
+		_, err = s.Create(ctx, Input{Name: "Admin", Email: email, Password: password, Age: 1})
+		if errors.Is(err, ErrEmailTaken) {
+			// Outra instância criou entre a busca e o insert.
+			existing, err = s.repo.FindByEmail(ctx, email)
+		} else if err != nil {
+			return err
+		} else {
+			existing, err = s.repo.FindByEmail(ctx, email)
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	if slices.Contains(existing.Roles, RoleAdmin) {
+		return nil
+	}
+
+	_, err = s.repo.SetRoles(ctx, existing.ID, append(slices.Clone(existing.Roles), RoleAdmin))
+	return err
 }

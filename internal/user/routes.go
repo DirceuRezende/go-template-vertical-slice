@@ -1,13 +1,21 @@
 package user
 
-import "github.com/gin-gonic/gin"
+import (
+	"users-api/internal/plataform/authn"
 
-// RegisterRoutes registra as rotas do módulo de usuários.
-func (h *Handler) RegisterRoutes(r gin.IRouter) {
+	"github.com/gin-gonic/gin"
+)
+
+// RegisterRoutes registra as rotas do módulo de usuários. authenticate é o
+// middleware de autenticação; só o cadastro (POST /users) é público.
+func (h *Handler) RegisterRoutes(r gin.IRouter, authenticate gin.HandlerFunc) {
 	g := r.Group("/users")
-	g.GET("", h.GetAll)
 	g.POST("", h.Create)
-	g.GET("/:id", h.Get)
-	g.PUT("/:id", h.Update)
-	g.DELETE("/:id", h.Delete)
+
+	protected := g.Group("", authenticate)
+	protected.GET("", authn.RequireRole(authn.AdminRole), h.GetAll)
+	protected.GET("/:id", h.Get)
+	protected.PUT("/:id", h.Update)
+	protected.DELETE("/:id", h.Delete)
+	protected.PUT("/:id/roles", authn.RequireRole(authn.AdminRole), h.UpdateRoles)
 }
