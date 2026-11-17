@@ -12,57 +12,36 @@ import (
 
 	"users-api/internal/httpapi"
 	"users-api/internal/plataform/database"
-	"users-api/internal/plataform/password"
 	"users-api/internal/user"
-
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	// .env é opcional: em produção as variáveis vêm do ambiente.
-	_ = godotenv.Load()
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL não definida")
-	}
-
-	hasher, err := password.NewHasher(os.Getenv("PASSWORD_PEPPER"))
+	cfg, err := setup()
 	if err != nil {
-		log.Fatalf("PASSWORD_PEPPER: %v", err)
+		log.Fatal(err)
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	// Precisa vir antes de subir o router: registra a tag strong_password.
-	if err := user.RegisterValidations(); err != nil {
-		log.Fatalf("register validations: %v", err)
-	}
-
-	if err := database.MigrateUp(databaseURL); err != nil {
+	if err := database.MigrateUp(cfg.databaseURL); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := database.NewPool(ctx, database.DefaultConfig(databaseURL, "users-api"))
+	pool, err := database.NewPool(ctx, database.DefaultConfig(cfg.databaseURL, "users-api"))
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}
 	defer pool.Close()
 
 	repository := user.NewPostgresRepository(pool)
-	service := user.NewService(repository, hasher)
+	service := user.NewService(repository, cfg.hasher)
 	userHandler := user.NewHandler(service)
 
 	router := httpapi.NewRouter(userHandler)
 
 	srv := &http.Server{
-		Addr:              ":" + port,
+		Addr:              ":" + cfg.port,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
