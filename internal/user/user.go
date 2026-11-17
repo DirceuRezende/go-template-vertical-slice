@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("Usuário não encontrado")
-	ErrInvalidID = errors.New("ID do usuário inválido")
+	ErrNotFound   = errors.New("Usuário não encontrado")
+	ErrInvalidID  = errors.New("ID do usuário inválido")
+	ErrEmailTaken = errors.New("Email já cadastrado")
 )
 
 type User struct {

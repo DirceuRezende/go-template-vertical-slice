@@ -1,0 +1,13 @@
+.PHONY: test test-integration test-e2e test-all
+
+test:
+	go test ./...
+
+test-integration:
+	go test -tags=integration ./...
+
+test-e2e:
+	go test -tags=e2e ./test/...
+
+test-all:
+	go test -race -tags='integration e2e' ./...

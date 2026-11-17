@@ -13,6 +13,7 @@ import (
 	"users-api/internal/httpapi"
 	"users-api/internal/plataform/database"
 	"users-api/internal/user"
+	"users-api/internal/user/postgres"
 )
 
 func main() {
@@ -34,7 +35,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	repository := user.NewPostgresRepository(pool)
+	repository := postgres.NewRepository(pool)
 	service := user.NewService(repository, cfg.hasher)
 	userHandler := user.NewHandler(service)
 

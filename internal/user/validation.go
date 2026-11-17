@@ -1,6 +1,7 @@
 package user
 
 import (
+	"reflect"
 	"strings"
 	"unicode"
 
@@ -33,6 +34,14 @@ func strongPassword(fl validator.FieldLevel) bool {
 // Chame uma vez na inicialização (ex.: no main, antes de subir o router).
 func RegisterValidations() error {
 	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+		// Os erros usam o nome do campo no JSON (ex.: "password"), não o da struct.
+		v.RegisterTagNameFunc(func(f reflect.StructField) string {
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if name == "-" {
+				return ""
+			}
+			return name
+		})
 		return v.RegisterValidation("strong_password", strongPassword)
 	}
 	return nil

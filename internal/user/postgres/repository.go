@@ -1,118 +1,117 @@
+// Package postgres implementa user.Repository sobre PostgreSQL (pgx).
 package postgres
 
 import (
 	"context"
 	"errors"
-	"fmt"
+	"uuid"
 
 	"users-api/internal/user"
 
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const emailUniqueIndex = "users_email_unique_idx"
+
+const userColumns = "id::text, name, email, password, age, created_at, updated_at"
+
 type Repository struct {
-	db *pgxpool.Pool
+	pool *pgxpool.Pool
 }
 
-func NewRepository(db *pgxpool.Pool) *Repository {
-	return &Repository{db: db}
+func NewRepository(pool *pgxpool.Pool) *Repository {
+	return &Repository{pool: pool}
 }
 
-func (r *Repository) Save(ctx context.Context, p user.User) (*user.User, error) {
-	const query = `
-		INSERT INTO user (name, email, password, age)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, name, email, password, age, created_at, updated_at`
-
-	var saved user.User
-	err := r.db.QueryRow(ctx, query,
-		p.Name, p.Name, p.Email, p.Password, p.Age,
-	).Scan(&saved.ID, &saved.Name, &saved.Email, &saved.Password, &saved.Age, &saved.CreatedAt, &saved.UpdatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("save user: %w", err)
+// mapError traduz a violação do índice único de email em user.ErrEmailTaken.
+func mapError(err error) error {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok &&
+		pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == emailUniqueIndex {
+		return user.ErrEmailTaken
 	}
-
-	return &saved, nil
+	return err
 }
 
-func (r *Repository) Update(ctx context.Context, p user.User) (*user.User, error) {
-	const query = `
-		UPDATE users
-		SET name = $2, email = $3, age = $4, updated_at = $5
-		WHERE id = $1
-		RETURNING id, name, email, password, age, created_at, updated_at`
+func scanUser(row pgx.Row) (*user.User, error) {
+	var (
+		u  user.User
+		id string
+	)
 
-	var updated user.User
-	err := r.db.QueryRow(ctx, query,
-		p.ID, p.Name, p.Email, p.Age, p.UpdatedAt,
-	).Scan(&updated.ID, &updated.Name, &updated.Email, &updated.Password, &updated.Age, &updated.CreatedAt, &updated.UpdatedAt)
-	if err != nil {
+	if err := row.Scan(&id, &u.Name, &u.Email, &u.Password, &u.Age, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, user.ErrNotFound
 		}
-		return nil, fmt.Errorf("update user: %w", err)
+		return nil, err
 	}
 
-	return &updated, nil
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return nil, err
+	}
+	u.ID = parsed
+
+	return &u, nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id uint64) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+func (r *Repository) Save(ctx context.Context, u user.User) (*user.User, error) {
+	row := r.pool.QueryRow(ctx,
+		`INSERT INTO users (id, name, email, password, age, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING `+userColumns,
+		u.ID.String(), u.Name, u.Email, u.Password, u.Age, u.CreatedAt, u.UpdatedAt)
+
+	saved, err := scanUser(row)
+	return saved, mapError(err)
+}
+
+func (r *Repository) Update(ctx context.Context, u user.User) (*user.User, error) {
+	row := r.pool.QueryRow(ctx,
+		`UPDATE users
+		 SET name = $2, email = $3, age = $4, updated_at = now()
+		 WHERE id = $1
+		 RETURNING `+userColumns,
+		u.ID.String(), u.Name, u.Email, u.Age)
+
+	updated, err := scanUser(row)
+	return updated, mapError(err)
+}
+
+func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id.String())
 	if err != nil {
-		return fmt.Errorf("delete user: %w", err)
+		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return user.ErrNotFound
 	}
-
 	return nil
 }
 
-func (r *Repository) FindOne(ctx context.Context, id uint64) (*user.User, error) {
-	const query = `
-		SELECT id, name, email, password, age, created_at, updated_at
-		FROM users
-		WHERE id = $1`
+func (r *Repository) FindOne(ctx context.Context, id uuid.UUID) (*user.User, error) {
+	row := r.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id.String())
 
-	var found user.User
-	err := r.db.QueryRow(ctx, query, id).Scan(
-		&found.ID, &found.Name, &found.Email, &found.Password, &found.Age, &found.CreatedAt, &found.UpdatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, user.ErrNotFound
-		}
-		return nil, fmt.Errorf("find user: %w", err)
-	}
-
-	return &found, nil
+	return scanUser(row)
 }
 
 func (r *Repository) FindAll(ctx context.Context) ([]*user.User, error) {
-	const query = `
-		SELECT id, name, email, password, age, created_at, updated_at
-		FROM users
-		ORDER BY id`
-
-	rows, err := r.db.Query(ctx, query)
+	rows, err := r.pool.Query(ctx, `SELECT `+userColumns+` FROM users ORDER BY created_at`)
 	if err != nil {
-		return nil, fmt.Errorf("find all users: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
 
 	users := []*user.User{}
-
 	for rows.Next() {
-		var p user.User
-		if err := rows.Scan(&p.ID, &p.Name, &p.Email, &p.Password, &p.Age, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan user: %w", err)
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
 		}
-		users = append(users, &p)
+		users = append(users, u)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("find all users: %w", err)
-	}
-
-	return users, nil
+	return users, rows.Err()
 }

@@ -6,7 +6,6 @@ import (
 	"uuid"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-playground/validator/v10"
 )
 
 type UserRequest struct {
@@ -37,6 +36,18 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
+// statusFor mapeia erros de domínio para o status HTTP correspondente.
+func statusFor(err error) int {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrEmailTaken):
+		return http.StatusConflict
+	default:
+		return http.StatusBadRequest
+	}
+}
+
 func (h *Handler) Get(c *gin.Context) {
 	id := c.Param("id")
 
@@ -65,21 +76,14 @@ func (h *Handler) Create(c *gin.Context) {
 	var request UserRequest
 
 	if err := c.ShouldBind(&request); err != nil {
-		if _, ok := errors.AsType[validator.ValidationErrors](err); ok {
-			c.JSON(422, gin.H{
-				"error": err.Error(),
-			})
-			return
-		}
-
-		c.JSON(400, gin.H{"error": err.Error()})
+		respondBindError(c, err)
 		return
 	}
 
 	user, err := h.service.Create(c.Request.Context(), Input{Name: request.Name, Email: request.Email, Password: request.Password, Age: request.Age})
 
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		c.JSON(statusFor(err), gin.H{
 			"error": err.Error(),
 		})
 		return
@@ -104,25 +108,14 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 
 	if err := c.ShouldBind(&request); err != nil {
-		if _, ok := errors.AsType[validator.ValidationErrors](err); ok {
-			c.JSON(422, gin.H{
-				"error": err.Error(),
-			})
-			return
-		}
-
-		c.JSON(400, gin.H{"error": err.Error()})
+		respondBindError(c, err)
 		return
 	}
 
 	user, err := h.service.Update(c.Request.Context(), id, Input{Name: request.Name, Email: request.Email, Age: request.Age})
 
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, ErrNotFound) {
-			status = http.StatusNotFound
-		}
-		c.JSON(status, gin.H{
+		c.JSON(statusFor(err), gin.H{
 			"error": err.Error(),
 		})
 		return
